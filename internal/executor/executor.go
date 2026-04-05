@@ -26,5 +26,5 @@ func Exec(args []string, envVars map[string]string) error {
 		environ = append(environ, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	return syscall.Exec(binary, args, environ)
+	return syscall.Exec(binary, args, environ) //#nosec G204 -- args are user-provided CLI arguments for process replacement
 }

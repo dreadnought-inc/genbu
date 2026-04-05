@@ -41,11 +41,11 @@ func runImport(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) //#nosec G304 -- path is user-provided CLI argument
 	if err != nil {
 		return fmt.Errorf("opening file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	vars, err := imp.Import(f)
 	if err != nil {

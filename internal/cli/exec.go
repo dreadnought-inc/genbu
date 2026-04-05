@@ -24,7 +24,7 @@ func newExecCmd() *cobra.Command {
 	}
 }
 
-func runExec(cmd *cobra.Command, args []string) error {
+func runExec(_ *cobra.Command, args []string) error {
 	cfg, err := config.LoadFile(configFile)
 	if err != nil {
 		return err

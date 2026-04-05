@@ -9,7 +9,7 @@ import (
 
 // LoadFile reads and parses a genbu YAML config file.
 func LoadFile(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //#nosec G304 -- path is user-provided CLI argument
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}

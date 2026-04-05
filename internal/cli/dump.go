@@ -73,18 +73,16 @@ func runDump(_ *cobra.Command, _ []string) error {
 
 	switch format {
 	case "dotenv", "env":
-		writeDotenv(os.Stdout, vars)
+		return writeDotenv(os.Stdout, vars)
 	case "ini":
-		writeINI(os.Stdout, vars)
+		return writeINI(os.Stdout, vars)
 	case "toml":
-		writeTOML(os.Stdout, vars)
+		return writeTOML(os.Stdout, vars)
 	case "json":
 		return writeJSON(os.Stdout, vars)
 	default:
 		return fmt.Errorf("unsupported format: %s (supported: dotenv, ini, toml, json)", dumpFormat)
 	}
-
-	return nil
 }
 
 type kv struct {
@@ -100,17 +98,22 @@ func applyMask(inputs []validator.Input) []kv {
 	return vars
 }
 
-func writeDotenv(w io.Writer, vars []kv) {
+func writeDotenv(w io.Writer, vars []kv) error {
 	for _, v := range vars {
+		var err error
 		if strings.ContainsAny(v.Value, " \t\"'#$\\") || v.Value == "" {
-			fmt.Fprintf(w, "%s=%q\n", v.Name, v.Value)
+			_, err = fmt.Fprintf(w, "%s=%q\n", v.Name, v.Value)
 		} else {
-			fmt.Fprintf(w, "%s=%s\n", v.Name, v.Value)
+			_, err = fmt.Fprintf(w, "%s=%s\n", v.Name, v.Value)
+		}
+		if err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
-func writeINI(w io.Writer, vars []kv) {
+func writeINI(w io.Writer, vars []kv) error {
 	sections := make(map[string][]kv)
 	var noSection []kv
 	var order []string
@@ -130,24 +133,35 @@ func writeINI(w io.Writer, vars []kv) {
 	}
 
 	for _, v := range noSection {
-		fmt.Fprintf(w, "%s = %s\n", v.Name, v.Value)
+		if _, err := fmt.Fprintf(w, "%s = %s\n", v.Name, v.Value); err != nil {
+			return err
+		}
 	}
 	if len(noSection) > 0 && len(order) > 0 {
-		fmt.Fprintln(w)
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
 	}
 
 	for i, section := range order {
-		fmt.Fprintf(w, "[%s]\n", section)
+		if _, err := fmt.Fprintf(w, "[%s]\n", section); err != nil {
+			return err
+		}
 		for _, v := range sections[section] {
-			fmt.Fprintf(w, "%s = %s\n", v.Name, v.Value)
+			if _, err := fmt.Fprintf(w, "%s = %s\n", v.Name, v.Value); err != nil {
+				return err
+			}
 		}
 		if i < len(order)-1 {
-			fmt.Fprintln(w)
+			if _, err := fmt.Fprintln(w); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func writeTOML(w io.Writer, vars []kv) {
+func writeTOML(w io.Writer, vars []kv) error {
 	sections := make(map[string]map[string]string)
 	var topLevel []kv
 	var order []string
@@ -168,29 +182,41 @@ func writeTOML(w io.Writer, vars []kv) {
 	}
 
 	for _, v := range topLevel {
-		encodeTOMLValue(w, v.Name, v.Value)
+		if err := encodeTOMLValue(w, v.Name, v.Value); err != nil {
+			return err
+		}
 	}
 	if len(topLevel) > 0 && len(order) > 0 {
-		fmt.Fprintln(w)
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
 	}
 
 	for i, section := range order {
-		fmt.Fprintf(w, "[%s]\n", section)
+		if _, err := fmt.Fprintf(w, "[%s]\n", section); err != nil {
+			return err
+		}
 		for key, val := range sections[section] {
-			encodeTOMLValue(w, key, val)
+			if err := encodeTOMLValue(w, key, val); err != nil {
+				return err
+			}
 		}
 		if i < len(order)-1 {
-			fmt.Fprintln(w)
+			if _, err := fmt.Fprintln(w); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func encodeTOMLValue(w io.Writer, key, value string) {
-	// Try to encode as a native TOML value using the encoder
+func encodeTOMLValue(w io.Writer, key, value string) error {
 	m := map[string]string{key: value}
 	if err := toml.NewEncoder(w).Encode(m); err != nil {
-		fmt.Fprintf(w, "%s = %q\n", key, value)
+		_, fmtErr := fmt.Fprintf(w, "%s = %q\n", key, value)
+		return fmtErr
 	}
+	return nil
 }
 
 func writeJSON(w io.Writer, vars []kv) error {
@@ -202,8 +228,8 @@ func writeJSON(w io.Writer, vars []kv) error {
 	if err != nil {
 		return fmt.Errorf("encoding json: %w", err)
 	}
-	fmt.Fprintln(w, string(data))
-	return nil
+	_, err = fmt.Fprintln(w, string(data))
+	return err
 }
 
 // splitEnvName splits an env var name by underscore, treating the first

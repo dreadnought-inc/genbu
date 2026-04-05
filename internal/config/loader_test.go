@@ -28,7 +28,7 @@ func TestLoadFile_notFound(t *testing.T) {
 func TestLoadFile_invalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.yaml")
-	if err := os.WriteFile(path, []byte(":::invalid"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(":::invalid"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
