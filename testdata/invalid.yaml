@@ -1,0 +1,8 @@
+version: "1"
+
+variables:
+  - name: DUPLICATE_VAR
+    value: "first"
+
+  - name: DUPLICATE_VAR
+    value: "second"

@@ -1,0 +1,48 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+._*
+
+# Dist / Release
+dist/
+
+# Claude Code
+.claude/
+
+# User config (sample is tracked, actual configs are not)
+genbu.yaml
+genbu.*.yaml
+!genbu.yaml.sample
+
+# Environment files
+.env
+.env.*
+
+# Go
+vendor/

@@ -1,0 +1,21 @@
+version: "1"
+
+variables:
+  - name: APP_ENV
+    value: "production"
+
+groups:
+  - name: aws-params
+    source:
+      type: aws-ssm
+      region: "ap-northeast-1"
+    variables:
+      - name: DB_HOST
+        source:
+          path: "/myapp/prod/db-host"
+
+      - name: DB_PORT
+        source:
+          path: "/myapp/prod/db-port"
+        validate:
+          pattern: "^[0-9]+$"

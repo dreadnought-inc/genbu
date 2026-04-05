@@ -1,0 +1,28 @@
+version: "1"
+
+defaults:
+  required: true
+
+variables:
+  - name: APP_ENV
+    value: "production"
+    validate:
+      enum: ["development", "staging", "production"]
+
+  - name: PORT
+    value: "8080"
+    validate:
+      required: true
+      pattern: "^[0-9]+$"
+
+  - name: DATABASE_URL
+    value: "postgres://localhost:5432/mydb"
+    validate:
+      pattern: "^postgres://"
+      min_length: 10
+
+  - name: API_KEY
+    value: "abcdefghijklmnopqrstuvwxyz123456"
+    validate:
+      min_length: 32
+      max_length: 128

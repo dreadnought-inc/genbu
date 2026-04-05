@@ -1,0 +1,16 @@
+[app]
+env = "production"
+port = 8080
+
+[database]
+host = "localhost"
+port = 5432
+user = "admin"
+password = "s3cret"
+
+[database.pool]
+max_connections = 20
+idle_timeout = 30
+
+[api]
+key = "abc123def456"

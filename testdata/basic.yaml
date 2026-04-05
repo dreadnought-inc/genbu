@@ -1,0 +1,8 @@
+version: "1"
+
+variables:
+  - name: APP_ENV
+    value: "production"
+
+  - name: APP_PORT
+    value: "8080"
