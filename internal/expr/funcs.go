@@ -223,16 +223,16 @@ func fnConcat(args []string) (string, error) {
 var nowFunc = time.Now // overridable for testing
 
 var formatAliases = map[string]string{
-	"rfc3339":    time.RFC3339,
-	"iso8601":    time.RFC3339,
-	"rfc822":     time.RFC822,
-	"rfc850":     time.RFC850,
-	"rfc1123":    time.RFC1123,
-	"kitchen":    time.Kitchen,
-	"ansic":      time.ANSIC,
-	"stamp":      time.Stamp,
-	"unix":       "unix",
-	"unixmilli":  "unixmilli",
+	"rfc3339":   time.RFC3339,
+	"iso8601":   time.RFC3339,
+	"rfc822":    time.RFC822,
+	"rfc850":    time.RFC850,
+	"rfc1123":   time.RFC1123,
+	"kitchen":   time.Kitchen,
+	"ansic":     time.ANSIC,
+	"stamp":     time.Stamp,
+	"unix":      "unix",
+	"unixmilli": "unixmilli",
 }
 
 func resolveFormat(args []string, defaultFmt string) string {
