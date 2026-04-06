@@ -34,30 +34,22 @@ type Result struct {
 // Resolve processes the config and resolves all variable values.
 func (r *Resolver) Resolve(ctx context.Context, cfg *config.Config) (*Result, error) {
 	flatVars := cfg.Flatten()
-
-	// Phase 1: resolve raw values from providers/literals/env
-	rawValues := make(map[string]string, len(flatVars))
 	varConfigs := make(map[string]config.Variable, len(flatVars))
-
 	for _, v := range flatVars {
-		value, err := r.resolveVar(ctx, v)
-		if err != nil {
-			return nil, fmt.Errorf("resolving %s: %w", v.Name, err)
-		}
-
-		if value == "" && v.Default != "" {
-			value = v.Default
-		}
-
-		rawValues[v.Name] = value
 		varConfigs[v.Name] = v
 	}
 
-	// Phase 2: build dependency graph from ${VAR} and ${{ expr }} references
+	// Phase 1: build dependency graph.
+	// Collect refs from value, default, and source.key fields.
 	deps := make(map[string][]string, len(flatVars))
 	for _, v := range flatVars {
-		refs := extractAllRefs(rawValues[v.Name])
-		deps[v.Name] = refs
+		var refs []string
+		refs = append(refs, extractAllRefs(v.Value)...)
+		refs = append(refs, extractAllRefs(v.Default)...)
+		if v.Source != nil {
+			refs = append(refs, extractVarRefs(v.Source.EffectiveKey())...)
+		}
+		deps[v.Name] = dedupRefs(refs)
 	}
 
 	order, err := topoSort(flatVars, deps)
@@ -65,14 +57,33 @@ func (r *Resolver) Resolve(ctx context.Context, cfg *config.Config) (*Result, er
 		return nil, err
 	}
 
-	// Phase 3: expand ${VAR} references, then evaluate ${{ expr }} expressions
+	// Phase 1.5: prefetch keys that are fully known (no ${VAR} refs in source.key).
+	if prefetchErr := r.prefetchStaticKeys(ctx, flatVars); prefetchErr != nil {
+		return nil, prefetchErr
+	}
+
+	// Phase 2: resolve in topological order.
+	// For each variable, expand ${VAR} in source.key before calling the provider.
 	resolved := make(map[string]string, len(flatVars))
 	for _, name := range order {
-		value := expandRefs(rawValues[name], resolved)
+		v := varConfigs[name]
 
-		value, err := expr.Eval(value, resolved)
-		if err != nil {
-			return nil, fmt.Errorf("evaluating expressions in %s: %w", name, err)
+		value, resolveErr := r.resolveVarWithExpansion(ctx, v, resolved)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolving %s: %w", name, resolveErr)
+		}
+
+		if value == "" && v.Default != "" {
+			value = expandRefs(v.Default, resolved)
+		}
+
+		// Expand ${VAR} in the resolved value
+		value = expandRefs(value, resolved)
+
+		// Evaluate ${{ expr }} expressions
+		value, resolveErr = expr.Eval(value, resolved)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("evaluating expressions in %s: %w", name, resolveErr)
 		}
 
 		resolved[name] = value
@@ -94,29 +105,48 @@ func (r *Resolver) Resolve(ctx context.Context, cfg *config.Config) (*Result, er
 	}, nil
 }
 
+// extractVarRefs returns variable names referenced via ${VAR} in the string.
+func extractVarRefs(value string) []string {
+	matches := refPattern.FindAllStringSubmatch(value, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	refs := make([]string, 0, len(matches))
+	for _, m := range matches {
+		refs = append(refs, m[1])
+	}
+	return refs
+}
+
 // extractAllRefs returns variable names referenced via ${VAR} and ${{ expr }} in the value.
 func extractAllRefs(value string) []string {
-	seen := make(map[string]bool)
-	var refs []string
+	matches := refPattern.FindAllStringSubmatch(value, -1)
+	exprRefs := expr.ExtractExprVarRefs(value)
+	refs := make([]string, 0, len(matches)+len(exprRefs))
 
-	// Collect ${VAR} references
-	for _, m := range refPattern.FindAllStringSubmatch(value, -1) {
-		name := m[1]
-		if !seen[name] {
-			seen[name] = true
-			refs = append(refs, name)
-		}
+	for _, m := range matches {
+		refs = append(refs, m[1])
 	}
 
-	// Collect variable references inside ${{ expr }} expressions
-	for _, ref := range expr.ExtractExprVarRefs(value) {
-		if !seen[ref] {
-			seen[ref] = true
-			refs = append(refs, ref)
-		}
-	}
-
+	refs = append(refs, exprRefs...)
 	return refs
+}
+
+// dedupRefs returns unique refs preserving order.
+func dedupRefs(refs []string) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(refs))
+	result := make([]string, 0, len(refs))
+	for _, r := range refs {
+		if !seen[r] {
+			seen[r] = true
+			result = append(result, r)
+		}
+	}
+	return result
 }
 
 // expandRefs replaces ${VAR} references in value with resolved values.
@@ -132,7 +162,6 @@ func expandRefs(value string, resolved map[string]string) string {
 
 // topoSort performs topological sort with circular reference detection.
 func topoSort(vars []config.Variable, deps map[string][]string) ([]string, error) {
-	// Filter deps to only include references to known variables
 	known := make(map[string]bool, len(vars))
 	for _, v := range vars {
 		known[v.Name] = true
@@ -163,7 +192,7 @@ func topoSort(vars []config.Variable, deps map[string][]string) ([]string, error
 
 		for _, dep := range deps[name] {
 			if !known[dep] {
-				continue // reference to external/unknown var, skip
+				continue
 			}
 			if err := visit(dep); err != nil {
 				return err
@@ -198,7 +227,50 @@ func buildCyclePath(path []string, target string) []string {
 	return []string{target, target}
 }
 
-func (r *Resolver) resolveVar(ctx context.Context, v config.Variable) (string, error) {
+// prefetchStaticKeys collects source keys that are fully known (no ${VAR} refs)
+// and calls Prefetch on providers that support it.
+func (r *Resolver) prefetchStaticKeys(ctx context.Context, vars []config.Variable) error {
+	keysByType := make(map[string][]provider.PrefetchKey)
+
+	for _, v := range vars {
+		if v.Source == nil || v.Source.Type == "" {
+			continue
+		}
+		// Skip env and literal — they don't benefit from prefetch
+		if v.Source.Type == "env" {
+			continue
+		}
+		key := v.Source.EffectiveKey()
+		if key == "" {
+			continue
+		}
+		// Skip keys with ${VAR} references — they aren't fully known yet
+		if refPattern.MatchString(key) {
+			continue
+		}
+		keysByType[v.Source.Type] = append(keysByType[v.Source.Type], provider.PrefetchKey{
+			Key:    key,
+			Region: v.Source.Region,
+		})
+	}
+
+	for typ, keys := range keysByType {
+		p, err := r.registry.Get(typ)
+		if err != nil {
+			continue
+		}
+		if pf, ok := p.(provider.Prefetcher); ok {
+			if err := pf.Prefetch(ctx, keys); err != nil {
+				return fmt.Errorf("prefetching %s keys: %w", typ, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// resolveVarWithExpansion resolves a variable, expanding ${VAR} in source.key first.
+func (r *Resolver) resolveVarWithExpansion(ctx context.Context, v config.Variable, resolved map[string]string) (string, error) {
 	// Literal value specified directly
 	if v.Value != "" && v.Source == nil {
 		return v.Value, nil
@@ -222,11 +294,22 @@ func (r *Resolver) resolveVar(ctx context.Context, v config.Variable) (string, e
 		return p.Resolve(ctx, src)
 	}
 
-	// Use the registered provider for the source type
-	p, err := r.registry.Get(v.Source.Type)
+	// Expand ${VAR} in source key before calling the provider
+	src := expandSourceKey(v.Source, resolved)
+
+	p, err := r.registry.Get(src.Type)
 	if err != nil {
 		return "", err
 	}
 
-	return p.Resolve(ctx, v.Source)
+	return p.Resolve(ctx, src)
+}
+
+// expandSourceKey returns a copy of the SourceConfig with ${VAR} expanded in key fields.
+func expandSourceKey(src *config.SourceConfig, resolved map[string]string) *config.SourceConfig {
+	expanded := *src
+	expanded.Key = expandRefs(src.Key, resolved)
+	expanded.Path = expandRefs(src.Path, resolved)         //nolint:staticcheck // backward compat field
+	expanded.SecretID = expandRefs(src.SecretID, resolved) //nolint:staticcheck // backward compat field
+	return &expanded
 }

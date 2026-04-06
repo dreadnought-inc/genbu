@@ -15,7 +15,7 @@ The name "Genbu" is derived from **Gen**erative **ENV** **U**tility, evoking Gen
 - **YAML-based configuration** — Define env vars, sources, defaults, and validation rules in a single file
 - **Multi-cloud support** — AWS (SSM, Secrets Manager), GCP (Secret Manager), Azure (App Configuration, Key Vault)
 - **Validation engine** — `required`, `pattern`, `enum`, `min_length`, `max_length`
-- **Variable references** — `${VAR}` syntax with automatic dependency resolution and circular reference detection
+- **Variable references** — `${VAR}` syntax in values and source keys, with automatic dependency resolution and circular reference detection
 - **Expression functions** — `${{ sha256(SECRET) }}`, `${{ random_hex(32) }}`, `${{ datetime("rfc3339") }}`, etc.
 - **Docker-native** — Uses `syscall.Exec` to replace the process (correct PID 1 / signal handling)
 - **Import existing configs** — Convert `.env`, `.ini`, `.toml` files into `genbu.yaml` templates
@@ -54,7 +54,7 @@ variables:
   - name: DB_HOST
     source:
       type: parameter
-      key: "/myapp/prod/db-host"
+      key: "/myapp/${APP_ENV}/db-host"   # ${VAR} works in source keys too
 
   - name: DB_PORT
     default: "5432"
@@ -70,6 +70,8 @@ variables:
   - name: BUILD_DATE
     value: "${{ date() }}"
 ```
+
+A single config file can serve multiple environments by using `${VAR}` in source keys.
 
 See [genbu.yaml.sample](genbu.yaml.sample) for a comprehensive example.
 
@@ -158,7 +160,7 @@ genbu exec --provider azure -c genbu.yaml -- /app/server
 
 ### Variable References
 
-Reference other variables with `${VAR_NAME}`. Dependencies are resolved automatically via topological sort. Circular references are detected and cause an error.
+Reference other variables with `${VAR_NAME}` in values, defaults, and source keys. Dependencies are resolved automatically via topological sort. Circular references are detected and cause an error.
 
 ```yaml
 - name: HOST
@@ -169,9 +171,30 @@ Reference other variables with `${VAR_NAME}`. Dependencies are resolved automati
   value: "postgres://${HOST}:${PORT}/mydb"
 ```
 
+Source keys also support `${VAR}` — this enables a single config file for multiple environments:
+
+```yaml
+- name: APP_ENV
+  source:
+    type: env
+  default: "staging"
+
+- name: DB_HOST
+  source:
+    type: parameter
+    key: "/myapp/${APP_ENV}/db-host"
+
+- name: API_SECRET
+  source:
+    type: secret
+    key: "myapp/${APP_ENV}/api-secret"
+```
+
 ```
 circular reference detected: A -> B -> A
 ```
+
+> **Performance note (AWS):** Static source keys (without `${VAR}`) are automatically batch-fetched using `GetParametersByPath`, reducing SSM API calls.
 
 ### Expression Functions
 
@@ -247,7 +270,7 @@ variables:
     default: "fallback"         # Fallback when resolved value is empty
     source:
       type: parameter           # Source type: parameter, secret, env
-      key: "/param/path"        # Key identifier for the parameter/secret
+      key: "/param/path"        # Key identifier (supports ${VAR} references)
       json_key: "field"         # Extract key from JSON secret
       region: "ap-northeast-1"  # Region override
     validate:
@@ -297,7 +320,7 @@ make clean       # Remove build artifacts
 - **YAML設定ファイル** — 環境変数の定義、取得元、デフォルト値、バリデーションルールを1ファイルに集約
 - **マルチクラウド対応** — AWS（SSM, Secrets Manager）、GCP（Secret Manager）、Azure（App Configuration, Key Vault）
 - **バリデーション** — `required`, `pattern`（正規表現）, `enum`, `min_length`, `max_length`
-- **変数参照** — `${VAR}` で他の変数を参照。依存関係を自動解決し、循環参照を検出
+- **変数参照** — `${VAR}` で値やソースキー内から他の変数を参照。依存関係を自動解決し、循環参照を検出
 - **関数式** — `${{ sha256(SECRET) }}`, `${{ random_hex(32) }}`, `${{ datetime("rfc3339") }}` など
 - **Docker対応** — `syscall.Exec` によるプロセス置換で PID 1 のシグナル処理に対応
 - **既存設定のインポート** — `.env`, `.ini`, `.toml` から `genbu.yaml` テンプレートを生成
@@ -336,7 +359,7 @@ variables:
   - name: DB_HOST
     source:
       type: parameter
-      key: "/myapp/prod/db-host"
+      key: "/myapp/${APP_ENV}/db-host"   # ソースキーでも ${VAR} が使えます
 
   - name: DB_PORT
     default: "5432"
@@ -352,6 +375,8 @@ variables:
   - name: BUILD_DATE
     value: "${{ date() }}"
 ```
+
+ソースキーに `${VAR}` を使えるため、1つの設定ファイルで複数環境に対応できます。
 
 すべてのオプションを網羅したサンプルは [genbu.yaml.sample](genbu.yaml.sample) を参照してください。
 
@@ -440,7 +465,7 @@ genbu exec --provider azure -c genbu.yaml -- /app/server
 
 ### 変数参照
 
-`${VAR_NAME}` で他の変数を参照できます。依存関係はトポロジカルソートで自動解決されます。
+`${VAR_NAME}` で値、デフォルト値、ソースキー内から他の変数を参照できます。依存関係はトポロジカルソートで自動解決されます。
 
 ```yaml
 - name: HOST
@@ -451,11 +476,32 @@ genbu exec --provider azure -c genbu.yaml -- /app/server
   value: "postgres://${HOST}:${PORT}/mydb"
 ```
 
+ソースキーでも `${VAR}` が使えるため、1つの設定ファイルで複数環境に対応できます:
+
+```yaml
+- name: APP_ENV
+  source:
+    type: env
+  default: "staging"
+
+- name: DB_HOST
+  source:
+    type: parameter
+    key: "/myapp/${APP_ENV}/db-host"
+
+- name: API_SECRET
+  source:
+    type: secret
+    key: "myapp/${APP_ENV}/api-secret"
+```
+
 循環参照が検出された場合はエラーで終了します:
 
 ```
 circular reference detected: A -> B -> A
 ```
+
+> **パフォーマンス（AWS）:** `${VAR}` を含まない静的なソースキーは `GetParametersByPath` で自動的にバッチ取得され、SSM API 呼び出し回数が削減されます。
 
 ### 関数式
 

@@ -16,6 +16,18 @@ type Provider interface {
 	Resolve(ctx context.Context, src *config.SourceConfig) (string, error)
 }
 
+// PrefetchKey represents a key to be prefetched along with its region context.
+type PrefetchKey struct {
+	Key    string
+	Region string
+}
+
+// Prefetcher is an optional interface that providers can implement to
+// batch-fetch values before the per-variable resolution loop.
+type Prefetcher interface {
+	Prefetch(ctx context.Context, keys []PrefetchKey) error
+}
+
 // Registry holds registered providers keyed by source type.
 type Registry struct {
 	providers map[string]Provider

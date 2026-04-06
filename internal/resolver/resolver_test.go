@@ -27,6 +27,18 @@ func (m *mockProvider) Resolve(_ context.Context, src *config.SourceConfig) (str
 	return v, nil
 }
 
+// mockPrefetchProvider implements both Provider and Prefetcher for testing.
+type mockPrefetchProvider struct {
+	mockProvider
+	prefetchKeys []provider.PrefetchKey
+	prefetchErr  error
+}
+
+func (m *mockPrefetchProvider) Prefetch(_ context.Context, keys []provider.PrefetchKey) error {
+	m.prefetchKeys = append(m.prefetchKeys, keys...)
+	return m.prefetchErr
+}
+
 func TestResolve_literalValues(t *testing.T) {
 	reg := provider.NewRegistry()
 	r := New(reg)
@@ -452,7 +464,7 @@ func TestExtractAllRefs(t *testing.T) {
 		{"no refs", "plain text", nil},
 		{"single ref", "${FOO}", []string{"FOO"}},
 		{"multiple refs", "${A}-${B}", []string{"A", "B"}},
-		{"duplicate refs", "${A}-${A}", []string{"A"}},
+		{"duplicate refs", "${A}-${A}", []string{"A", "A"}},
 		{"embedded", "prefix-${VAR}-suffix", []string{"VAR"}},
 		{"underscore", "${MY_VAR_1}", []string{"MY_VAR_1"}},
 		{"invalid syntax not matched", "$FOO", nil},
@@ -617,5 +629,374 @@ func TestResolve_preservesValidateConfig(t *testing.T) {
 	}
 	if len(result.Vars[0].Validate.Enum) != 2 {
 		t.Errorf("enum count = %d, want 2", len(result.Vars[0].Validate.Enum))
+	}
+}
+
+func TestResolve_sourceKeyWithVarRef(t *testing.T) {
+	mock := &mockProvider{
+		sourceType: "parameter",
+		values: map[string]string{
+			"/myapp/prod/db-host": "db.example.com",
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "APP_ENV", Value: "prod"},
+			{
+				Name: "DB_HOST",
+				Source: &config.SourceConfig{
+					Type: "parameter",
+					Key:  "/myapp/${APP_ENV}/db-host",
+				},
+			},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Vars[1].Value != "db.example.com" {
+		t.Errorf("value = %q, want %q", result.Vars[1].Value, "db.example.com")
+	}
+}
+
+func TestResolve_sourceKeyChainedRef(t *testing.T) {
+	mock := &mockProvider{
+		sourceType: "parameter",
+		values: map[string]string{
+			"/myapp/production/us-east-1/db-host": "db.prod.example.com",
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "APP_ENV", Value: "production"},
+			{Name: "REGION", Value: "us-east-1"},
+			{
+				Name: "DB_HOST",
+				Source: &config.SourceConfig{
+					Type: "parameter",
+					Key:  "/myapp/${APP_ENV}/${REGION}/db-host",
+				},
+			},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Vars[2].Value != "db.prod.example.com" {
+		t.Errorf("value = %q, want %q", result.Vars[2].Value, "db.prod.example.com")
+	}
+}
+
+func TestResolve_sourceKeyCircularRef(t *testing.T) {
+	reg := provider.NewRegistry()
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{
+				Name: "A",
+				Source: &config.SourceConfig{
+					Type: "parameter",
+					Key:  "/path/${B}",
+				},
+			},
+			{
+				Name: "B",
+				Source: &config.SourceConfig{
+					Type: "parameter",
+					Key:  "/path/${A}",
+				},
+			},
+		},
+	}
+
+	_, err := r.Resolve(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for circular reference in source keys")
+	}
+	if !strings.Contains(err.Error(), "circular reference") {
+		t.Errorf("error = %q, want to contain 'circular reference'", err.Error())
+	}
+}
+
+func TestResolve_sourceKeyWithEnvDefault(t *testing.T) {
+	mock := &mockProvider{
+		sourceType: "parameter",
+		values: map[string]string{
+			"/myapp/staging/db-host": "db.staging.example.com",
+		},
+	}
+
+	reg := provider.NewDefaultRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{
+				Name:    "APP_ENV",
+				Source:  &config.SourceConfig{Type: "env"},
+				Default: "staging",
+			},
+			{
+				Name: "DB_HOST",
+				Source: &config.SourceConfig{
+					Type: "parameter",
+					Key:  "/myapp/${APP_ENV}/db-host",
+				},
+			},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Vars[1].Value != "db.staging.example.com" {
+		t.Errorf("value = %q, want %q", result.Vars[1].Value, "db.staging.example.com")
+	}
+}
+
+// --- Prefetch integration tests ---
+
+func TestResolve_prefetchCalledForStaticKeys(t *testing.T) {
+	mock := &mockPrefetchProvider{
+		mockProvider: mockProvider{
+			sourceType: "parameter",
+			values: map[string]string{
+				"/app/db-host": "db.example.com",
+				"/app/db-port": "5432",
+			},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "DB_HOST", Source: &config.SourceConfig{Type: "parameter", Key: "/app/db-host"}},
+			{Name: "DB_PORT", Source: &config.SourceConfig{Type: "parameter", Key: "/app/db-port"}},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Prefetch should have been called with both static keys
+	if len(mock.prefetchKeys) != 2 {
+		t.Fatalf("prefetchKeys count = %d, want 2", len(mock.prefetchKeys))
+	}
+
+	if result.Vars[0].Value != "db.example.com" {
+		t.Errorf("DB_HOST = %q, want %q", result.Vars[0].Value, "db.example.com")
+	}
+}
+
+func TestResolve_prefetchNotCalledForDynamicKeys(t *testing.T) {
+	mock := &mockPrefetchProvider{
+		mockProvider: mockProvider{
+			sourceType: "parameter",
+			values: map[string]string{
+				"/app/prod/db-host": "db.example.com",
+			},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "ENV", Value: "prod"},
+			{Name: "DB_HOST", Source: &config.SourceConfig{Type: "parameter", Key: "/app/${ENV}/db-host"}},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Dynamic key should NOT be in prefetch
+	if len(mock.prefetchKeys) != 0 {
+		t.Errorf("prefetchKeys = %v, want empty (dynamic key should be excluded)", mock.prefetchKeys)
+	}
+
+	if result.Vars[1].Value != "db.example.com" {
+		t.Errorf("DB_HOST = %q, want %q", result.Vars[1].Value, "db.example.com")
+	}
+}
+
+func TestResolve_prefetchMixedStaticAndDynamic(t *testing.T) {
+	mock := &mockPrefetchProvider{
+		mockProvider: mockProvider{
+			sourceType: "parameter",
+			values: map[string]string{
+				"/app/static-key":   "static-value",
+				"/app/prod/dynamic": "dynamic-value",
+			},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "ENV", Value: "prod"},
+			{Name: "STATIC", Source: &config.SourceConfig{Type: "parameter", Key: "/app/static-key"}},
+			{Name: "DYNAMIC", Source: &config.SourceConfig{Type: "parameter", Key: "/app/${ENV}/dynamic"}},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Only static key should be in prefetch
+	if len(mock.prefetchKeys) != 1 {
+		t.Fatalf("prefetchKeys count = %d, want 1", len(mock.prefetchKeys))
+	}
+	if mock.prefetchKeys[0].Key != "/app/static-key" {
+		t.Errorf("prefetchKeys[0].Key = %q, want %q", mock.prefetchKeys[0].Key, "/app/static-key")
+	}
+
+	if result.Vars[1].Value != "static-value" {
+		t.Errorf("STATIC = %q, want %q", result.Vars[1].Value, "static-value")
+	}
+	if result.Vars[2].Value != "dynamic-value" {
+		t.Errorf("DYNAMIC = %q, want %q", result.Vars[2].Value, "dynamic-value")
+	}
+}
+
+func TestResolve_prefetchProviderWithoutPrefetcher(t *testing.T) {
+	// mockProvider does NOT implement Prefetcher
+	mock := &mockProvider{
+		sourceType: "parameter",
+		values: map[string]string{
+			"/app/key": "value",
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "VAR", Source: &config.SourceConfig{Type: "parameter", Key: "/app/key"}},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Vars[0].Value != "value" {
+		t.Errorf("value = %q, want %q", result.Vars[0].Value, "value")
+	}
+}
+
+func TestResolve_prefetchWithRegion(t *testing.T) {
+	mock := &mockPrefetchProvider{
+		mockProvider: mockProvider{
+			sourceType: "parameter",
+			values: map[string]string{
+				"/app/key": "value",
+			},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register(mock)
+	r := New(reg)
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "VAR", Source: &config.SourceConfig{Type: "parameter", Key: "/app/key", Region: "ap-northeast-1"}},
+		},
+	}
+
+	_, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(mock.prefetchKeys) != 1 {
+		t.Fatalf("prefetchKeys count = %d, want 1", len(mock.prefetchKeys))
+	}
+	if mock.prefetchKeys[0].Region != "ap-northeast-1" {
+		t.Errorf("region = %q, want %q", mock.prefetchKeys[0].Region, "ap-northeast-1")
+	}
+}
+
+func TestResolve_prefetchEnvProviderSkipped(t *testing.T) {
+	// Use a prefetch-capable mock for "parameter" to track calls,
+	// plus the real env provider for env variables.
+	mock := &mockPrefetchProvider{
+		mockProvider: mockProvider{
+			sourceType: "parameter",
+			values:     map[string]string{},
+		},
+	}
+
+	reg := provider.NewDefaultRegistry() // includes env provider
+	reg.Register(mock)
+	r := New(reg)
+
+	t.Setenv("MY_VAR", "from-env")
+
+	cfg := &config.Config{
+		Version: "1",
+		Variables: []config.Variable{
+			{Name: "MY_VAR", Source: &config.SourceConfig{Type: "env"}},
+		},
+	}
+
+	result, err := r.Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// env type should not trigger prefetch on the parameter mock
+	if len(mock.prefetchKeys) != 0 {
+		t.Errorf("prefetchKeys = %v, want empty (env should be skipped)", mock.prefetchKeys)
+	}
+	if result.Vars[0].Value != "from-env" {
+		t.Errorf("value = %q, want %q", result.Vars[0].Value, "from-env")
 	}
 }
