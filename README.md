@@ -11,7 +11,7 @@
 ### Features
 
 - **YAML-based configuration** — Define env vars, sources, defaults, and validation rules in a single file
-- **Cloud provider integration** — AWS SSM Parameter Store, AWS Secrets Manager (GCP/Azure planned)
+- **Multi-cloud support** — AWS (SSM, Secrets Manager), GCP (Secret Manager), Azure (App Configuration, Key Vault)
 - **Validation engine** — `required`, `pattern`, `enum`, `min_length`, `max_length`
 - **Variable references** — `${VAR}` syntax with automatic dependency resolution and circular reference detection
 - **Expression functions** — `${{ sha256(SECRET) }}`, `${{ random_hex(32) }}`, `${{ datetime("rfc3339") }}`, etc.
@@ -38,6 +38,7 @@ Download from [Releases](https://github.com/dreadnought-inc/genbu/releases).
 ```yaml
 # genbu.yaml
 version: "1"
+provider: aws
 
 defaults:
   required: true
@@ -50,8 +51,8 @@ variables:
 
   - name: DB_HOST
     source:
-      type: aws-ssm
-      path: "/myapp/prod/db-host"
+      type: parameter
+      key: "/myapp/prod/db-host"
 
   - name: DB_PORT
     default: "5432"
@@ -109,13 +110,49 @@ genbu import .env > genbu.yaml
 
 ### Source Types
 
-| `source.type` | Description |
-|----------------|-------------|
-| *(none with `value:`)* | Literal value |
-| `aws-ssm` | AWS SSM Parameter Store |
-| `aws-secretsmanager` | AWS Secrets Manager (`json_key` supported) |
-| `env` | Read from existing environment variable |
-| *(none, no `value:`)* | Read from current env for validation only |
+| `source.type` | AWS | GCP | Azure |
+|----------------|-----|-----|-------|
+| `parameter` | SSM Parameter Store | Secret Manager | App Configuration |
+| `secret` | Secrets Manager | Secret Manager | Key Vault |
+| `env` | Read from environment | same | same |
+| *(none with `value:`)* | Literal value | same | same |
+| *(none, no `value:`)* | Validate-only (reads current env) | same | same |
+
+The `provider` setting determines which cloud backend each source type maps to.
+Default: `aws`. Set via `provider:` in YAML or `--provider` CLI flag.
+
+### Provider Configuration
+
+Each provider uses its SDK's standard authentication and environment variables.
+
+**AWS** (default)
+
+```bash
+# Standard AWS credentials (IAM role, env vars, shared config, etc.)
+genbu exec -c genbu.yaml -- /app/server
+
+# Custom endpoint for LocalStack, Foci, etc.
+export AWS_ENDPOINT_URL=http://localhost:4566
+```
+
+**GCP**
+
+```bash
+# Application Default Credentials
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+genbu exec --provider gcp -c genbu.yaml -- /app/server
+```
+
+GCP uses Secret Manager for both `parameter` and `secret` source types. Key format: `projects/{project}/secrets/{name}` (version defaults to `latest`).
+
+**Azure**
+
+```bash
+# DefaultAzureCredential + service endpoints
+export AZURE_APPCONFIG_ENDPOINT=https://myconfig.azconfig.io
+export AZURE_KEYVAULT_URL=https://myvault.vault.azure.net
+genbu exec --provider azure -c genbu.yaml -- /app/server
+```
 
 ### Variable References
 
@@ -196,6 +233,7 @@ variables:
 
 ```yaml
 version: "1"                    # Required. Only "1" is supported.
+provider: aws                   # Cloud provider: aws, gcp, azure
 dump_format: dotenv             # Default dump output format (dotenv/ini/toml/json)
 
 defaults:
@@ -206,11 +244,10 @@ variables:
     value: "literal"            # Literal value (supports ${REF} and ${{ expr }})
     default: "fallback"         # Fallback when resolved value is empty
     source:
-      type: aws-ssm            # Provider type
-      path: "/param/path"      # SSM parameter path
-      secret_id: "secret-name" # Secrets Manager secret ID
-      json_key: "key"          # Extract key from JSON secret
-      region: "ap-northeast-1" # AWS region override
+      type: parameter           # Source type: parameter, secret, env
+      key: "/param/path"        # Key identifier for the parameter/secret
+      json_key: "field"         # Extract key from JSON secret
+      region: "ap-northeast-1"  # Region override
     validate:
       required: true
       pattern: "^prefix"
@@ -221,12 +258,12 @@ variables:
 groups:
   - name: group-name
     source:                     # Shared source config (inherited by variables)
-      type: aws-ssm
+      type: parameter
       region: "ap-northeast-1"
     variables:
       - name: GROUPED_VAR
         source:
-          path: "/param/path"   # Merged with group source
+          key: "/param/path"    # Merged with group source
 ```
 
 ### Development
@@ -254,7 +291,7 @@ make clean       # Remove build artifacts
 ### 主な機能
 
 - **YAML設定ファイル** — 環境変数の定義、取得元、デフォルト値、バリデーションルールを1ファイルに集約
-- **クラウドプロバイダ連携** — AWS SSM Parameter Store / Secrets Manager 対応（GCP/Azure は将来対応予定）
+- **マルチクラウド対応** — AWS（SSM, Secrets Manager）、GCP（Secret Manager）、Azure（App Configuration, Key Vault）
 - **バリデーション** — `required`, `pattern`（正規表現）, `enum`, `min_length`, `max_length`
 - **変数参照** — `${VAR}` で他の変数を参照。依存関係を自動解決し、循環参照を検出
 - **関数式** — `${{ sha256(SECRET) }}`, `${{ random_hex(32) }}`, `${{ datetime("rfc3339") }}` など
@@ -281,6 +318,7 @@ go install github.com/dreadnought-inc/genbu/cmd/genbu@latest
 ```yaml
 # genbu.yaml
 version: "1"
+provider: aws
 
 defaults:
   required: true
@@ -293,8 +331,8 @@ variables:
 
   - name: DB_HOST
     source:
-      type: aws-ssm
-      path: "/myapp/prod/db-host"
+      type: parameter
+      key: "/myapp/prod/db-host"
 
   - name: DB_PORT
     default: "5432"
@@ -352,13 +390,49 @@ genbu import .env > genbu.yaml
 
 ### ソースタイプ
 
-| `source.type` | 説明 |
-|----------------|------|
-| *（`value:` 指定時は省略）* | リテラル値 |
-| `aws-ssm` | AWS SSM Parameter Store |
-| `aws-secretsmanager` | AWS Secrets Manager（`json_key` でJSONキー抽出対応） |
-| `env` | 既存の環境変数を読み取り |
-| *（`source` / `value` ともに省略）* | 現在の環境変数を読み取り（バリデーション専用） |
+| `source.type` | AWS | GCP | Azure |
+|----------------|-----|-----|-------|
+| `parameter` | SSM Parameter Store | Secret Manager | App Configuration |
+| `secret` | Secrets Manager | Secret Manager | Key Vault |
+| `env` | 環境変数を読み取り | 同 | 同 |
+| *（`value:` 指定時は省略）* | リテラル値 | 同 | 同 |
+| *（`source`/`value` ともに省略）* | バリデーション専用（現在のenvを読み取り） | 同 | 同 |
+
+`provider` 設定により各ソースタイプのクラウドバックエンドが決まります。
+デフォルト: `aws`。YAML の `provider:` または CLI `--provider` フラグで指定。
+
+### プロバイダ設定
+
+各プロバイダはSDKの標準的な認証・環境変数を使用します。
+
+**AWS**（デフォルト）
+
+```bash
+# 標準のAWS認証情報（IAMロール、環境変数、共有設定ファイル等）
+genbu exec -c genbu.yaml -- /app/server
+
+# LocalStack等へのカスタムエンドポイント指定
+export AWS_ENDPOINT_URL=http://localhost:4566
+```
+
+**GCP**
+
+```bash
+# Application Default Credentials
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+genbu exec --provider gcp -c genbu.yaml -- /app/server
+```
+
+GCPでは `parameter` と `secret` の両方が Secret Manager にマッピングされます。keyの形式: `projects/{project}/secrets/{name}`（バージョンは省略時 `latest`）。
+
+**Azure**
+
+```bash
+# DefaultAzureCredential + サービスエンドポイント
+export AZURE_APPCONFIG_ENDPOINT=https://myconfig.azconfig.io
+export AZURE_KEYVAULT_URL=https://myvault.vault.azure.net
+genbu exec --provider azure -c genbu.yaml -- /app/server
+```
 
 ### 変数参照
 

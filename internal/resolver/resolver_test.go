@@ -19,10 +19,7 @@ type mockProvider struct {
 func (m *mockProvider) Type() string { return m.sourceType }
 
 func (m *mockProvider) Resolve(_ context.Context, src *config.SourceConfig) (string, error) {
-	key := src.Path
-	if key == "" {
-		key = src.SecretID
-	}
+	key := src.EffectiveKey()
 	v, ok := m.values[key]
 	if !ok {
 		return "", fmt.Errorf("key not found: %s", key)
@@ -109,7 +106,7 @@ func TestResolve_noSourceNoValue(t *testing.T) {
 
 func TestResolve_withMockProvider(t *testing.T) {
 	mock := &mockProvider{
-		sourceType: "aws-ssm",
+		sourceType: "parameter",
 		values: map[string]string{
 			"/app/db-host": "db.example.com",
 		},
@@ -125,8 +122,8 @@ func TestResolve_withMockProvider(t *testing.T) {
 			{
 				Name: "DB_HOST",
 				Source: &config.SourceConfig{
-					Type: "aws-ssm",
-					Path: "/app/db-host",
+					Type: "parameter",
+					Key:  "/app/db-host",
 				},
 			},
 		},
@@ -167,7 +164,7 @@ func TestResolve_unknownProvider(t *testing.T) {
 
 func TestResolve_withGroups(t *testing.T) {
 	mock := &mockProvider{
-		sourceType: "aws-ssm",
+		sourceType: "parameter",
 		values: map[string]string{
 			"/app/key1": "value1",
 			"/app/key2": "value2",
@@ -184,17 +181,17 @@ func TestResolve_withGroups(t *testing.T) {
 			{
 				Name: "test-group",
 				Source: &config.SourceConfig{
-					Type:   "aws-ssm",
+					Type:   "parameter",
 					Region: "us-east-1",
 				},
 				Variables: []config.Variable{
 					{
 						Name:   "KEY1",
-						Source: &config.SourceConfig{Path: "/app/key1"},
+						Source: &config.SourceConfig{Key: "/app/key1"},
 					},
 					{
 						Name:   "KEY2",
-						Source: &config.SourceConfig{Path: "/app/key2"},
+						Source: &config.SourceConfig{Key: "/app/key2"},
 					},
 				},
 			},

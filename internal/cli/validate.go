@@ -29,7 +29,9 @@ func runValidate(_ *cobra.Command, _ []string) error {
 	}
 
 	registry := provider.NewDefaultRegistry()
-	registerAWSProviders(registry)
+	if regErr := registerCloudProviders(registry, resolveProvider(cfg)); regErr != nil {
+		return regErr
+	}
 
 	r := resolver.New(registry)
 	result, err := r.Resolve(context.Background(), cfg)

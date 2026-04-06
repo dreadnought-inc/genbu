@@ -213,7 +213,7 @@ func (r *Resolver) resolveVar(ctx context.Context, v config.Variable) (string, e
 	if v.Source.Type == "env" {
 		src := &config.SourceConfig{
 			Type: "env",
-			Path: v.Name,
+			Key:  v.Name,
 		}
 		p, err := r.registry.Get("env")
 		if err != nil {

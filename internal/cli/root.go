@@ -16,10 +16,12 @@ var rootCmd = &cobra.Command{
 
 var configFile string
 var logLevel string
+var providerFlag string
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "genbu.yaml", "path to config file")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().StringVar(&providerFlag, "provider", "", "cloud provider: aws, gcp, azure (overrides config file)")
 
 	rootCmd.AddCommand(newVersionCmd())
 }

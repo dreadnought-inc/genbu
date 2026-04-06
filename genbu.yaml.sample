@@ -3,6 +3,11 @@
 
 version: "1"
 
+# Cloud provider: aws, gcp, azure
+# Can be overridden by --provider CLI flag.
+# Default: aws
+provider: aws
+
 # Default dump output format: dotenv, ini, toml, json
 # Can be overridden by --format CLI flag.
 dump_format: dotenv
@@ -124,13 +129,16 @@ variables:
     value: "${{ tohex(bcrypt(random_string(16), 4)) }}"
 
   # ===========================================================================
-  # AWS SSM Parameter Store
+  # Source type: parameter
   # ===========================================================================
-  # Requires AWS credentials (env vars, IAM role, instance profile, etc.)
+  # Fetches from the provider's parameter store.
+  #   AWS   → SSM Parameter Store
+  #   GCP   → Secret Manager
+  #   Azure → App Configuration (requires AZURE_APPCONFIG_ENDPOINT env var)
   - name: SSM_DATABASE_URL
     source:
-      type: aws-ssm
-      path: "/myapp/prod/database-url"
+      type: parameter
+      key: "/myapp/prod/database-url"
       region: "ap-northeast-1"    # optional: override default region
     validate:
       required: true
@@ -138,13 +146,16 @@ variables:
       min_length: 10
 
   # ===========================================================================
-  # AWS Secrets Manager
+  # Source type: secret
   # ===========================================================================
-  # Fetch a plain string secret.
+  # Fetches from the provider's secret store.
+  #   AWS   → Secrets Manager
+  #   GCP   → Secret Manager
+  #   Azure → Key Vault (requires AZURE_KEYVAULT_URL env var)
   - name: JWT_SECRET
     source:
-      type: aws-secretsmanager
-      secret_id: "myapp/prod/jwt-secret"
+      type: secret
+      key: "myapp/prod/jwt-secret"
     validate:
       required: true
       min_length: 64
@@ -155,8 +166,8 @@ variables:
   # json_key extracts just that key's value.
   - name: EXTERNAL_API_KEY
     source:
-      type: aws-secretsmanager
-      secret_id: "myapp/prod/external-api"
+      type: secret
+      key: "myapp/prod/external-api"
       json_key: "api_key"
     validate:
       required: true
@@ -192,39 +203,39 @@ variables:
 groups:
   - name: database-credentials
     source:
-      type: aws-ssm
+      type: parameter
       region: "ap-northeast-1"
     variables:
       - name: SSM_DB_HOST
         source:
-          path: "/myapp/prod/db-host"
+          key: "/myapp/prod/db-host"
         validate:
           required: true
 
       - name: SSM_DB_PORT
         source:
-          path: "/myapp/prod/db-port"
+          key: "/myapp/prod/db-port"
         validate:
           pattern: "^[0-9]+$"
 
       - name: SSM_DB_USER
         source:
-          path: "/myapp/prod/db-user"
+          key: "/myapp/prod/db-user"
 
       - name: SSM_DB_PASSWORD
         source:
-          path: "/myapp/prod/db-password"
+          key: "/myapp/prod/db-password"
         validate:
           min_length: 16
 
   - name: redis
     source:
-      type: aws-secretsmanager
+      type: secret
       region: "ap-northeast-1"
     variables:
       - name: REDIS_URL
         source:
-          secret_id: "myapp/prod/redis-url"
+          key: "myapp/prod/redis-url"
         validate:
           pattern: "^redis://"
 
@@ -243,14 +254,36 @@ groups:
 #   genbu dump -c genbu.yaml --format toml
 #   genbu dump -c genbu.yaml --format json --mask
 #
+#   # Override provider from CLI
+#   genbu exec --provider aws -c genbu.yaml -- /app/server
+#
 #   # Import existing config to generate genbu.yaml template
 #   genbu import .env > genbu.yaml
 #   genbu import config.ini > genbu.yaml
 #   genbu import --format toml settings.toml > genbu.yaml
 #
+#   # Use LocalStack or other AWS-compatible endpoint
+#   export AWS_ENDPOINT_URL=http://localhost:4566
+#   genbu exec -c genbu.yaml -- /app/server
+#
 #   # Use as Docker ENTRYPOINT
 #   ENTRYPOINT ["genbu", "exec", "-c", "/etc/genbu.yaml", "--"]
 #   CMD ["/app/server"]
+#
+# ===========================================================================
+# Source type mapping per provider
+# ===========================================================================
+#
+#   source.type  | AWS                    | GCP              | Azure
+#   -------------|------------------------|------------------|-----------------
+#   parameter    | SSM Parameter Store    | Secret Manager   | App Configuration
+#   secret       | Secrets Manager        | Secret Manager   | Key Vault
+#   env          | (environment variable) | (same)           | (same)
+#
+# Provider-specific environment variables:
+#   AWS:   AWS_ENDPOINT_URL (optional, for LocalStack etc.)
+#   GCP:   GOOGLE_APPLICATION_CREDENTIALS or Application Default Credentials
+#   Azure: AZURE_APPCONFIG_ENDPOINT, AZURE_KEYVAULT_URL
 #
 # ===========================================================================
 # Function reference

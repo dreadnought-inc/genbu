@@ -1,4 +1,4 @@
-package awsssm
+package aws
 
 import (
 	"context"
@@ -29,7 +29,7 @@ func (m *mockSSMClient) GetParameter(_ context.Context, input *ssm.GetParameterI
 	}, nil
 }
 
-func TestProvider_Resolve(t *testing.T) {
+func TestParameterProvider_Resolve(t *testing.T) {
 	client := &mockSSMClient{
 		params: map[string]string{
 			"/app/db-host": "db.example.com",
@@ -37,7 +37,7 @@ func TestProvider_Resolve(t *testing.T) {
 		},
 	}
 
-	p := New(client)
+	p := NewParameterProvider(client)
 
 	tests := []struct {
 		name    string
@@ -47,23 +47,28 @@ func TestProvider_Resolve(t *testing.T) {
 	}{
 		{
 			name: "existing parameter",
-			src:  &config.SourceConfig{Type: "aws-ssm", Path: "/app/db-host"},
+			src:  &config.SourceConfig{Type: "parameter", Key: "/app/db-host"},
 			want: "db.example.com",
 		},
 		{
 			name: "another parameter",
-			src:  &config.SourceConfig{Type: "aws-ssm", Path: "/app/db-port"},
+			src:  &config.SourceConfig{Type: "parameter", Key: "/app/db-port"},
 			want: "5432",
 		},
 		{
 			name:    "missing parameter",
-			src:     &config.SourceConfig{Type: "aws-ssm", Path: "/app/missing"},
+			src:     &config.SourceConfig{Type: "parameter", Key: "/app/missing"},
 			wantErr: true,
 		},
 		{
-			name:    "empty path",
-			src:     &config.SourceConfig{Type: "aws-ssm"},
+			name:    "empty key",
+			src:     &config.SourceConfig{Type: "parameter"},
 			wantErr: true,
+		},
+		{
+			name: "backward compat path fallback",
+			src:  &config.SourceConfig{Type: "parameter", Path: "/app/db-host"},
+			want: "db.example.com",
 		},
 	}
 
@@ -81,9 +86,9 @@ func TestProvider_Resolve(t *testing.T) {
 	}
 }
 
-func TestProvider_Type(t *testing.T) {
-	p := &Provider{}
-	if p.Type() != "aws-ssm" {
-		t.Errorf("Type() = %q, want %q", p.Type(), "aws-ssm")
+func TestParameterProvider_Type(t *testing.T) {
+	p := &ParameterProvider{}
+	if p.Type() != "parameter" {
+		t.Errorf("Type() = %q, want %q", p.Type(), "parameter")
 	}
 }

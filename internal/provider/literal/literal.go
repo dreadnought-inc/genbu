@@ -15,8 +15,8 @@ func (p *Provider) Type() string {
 	return "literal"
 }
 
-// Resolve returns the value from the source config path field,
+// Resolve returns the value from the source config key field,
 // which is repurposed to carry the literal value.
 func (p *Provider) Resolve(_ context.Context, src *config.SourceConfig) (string, error) {
-	return src.Path, nil
+	return src.EffectiveKey(), nil
 }

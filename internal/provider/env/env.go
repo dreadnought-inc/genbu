@@ -15,7 +15,7 @@ func (p *Provider) Type() string {
 	return "env"
 }
 
-// Resolve reads the environment variable with the name stored in src.Path.
+// Resolve reads the environment variable with the name stored in src.Key.
 func (p *Provider) Resolve(_ context.Context, src *config.SourceConfig) (string, error) {
-	return os.Getenv(src.Path), nil
+	return os.Getenv(src.EffectiveKey()), nil
 }

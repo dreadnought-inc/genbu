@@ -3,6 +3,7 @@ package config
 // Config represents the top-level genbu configuration.
 type Config struct {
 	Version    string     `yaml:"version"`
+	Provider   string     `yaml:"provider,omitempty"`
 	DumpFormat string     `yaml:"dump_format,omitempty"`
 	Defaults   *Defaults  `yaml:"defaults,omitempty"`
 	Variables  []Variable `yaml:"variables,omitempty"`
@@ -25,11 +26,26 @@ type Variable struct {
 
 // SourceConfig defines where to fetch a variable's value.
 type SourceConfig struct {
-	Type     string `yaml:"type"`
+	Type    string `yaml:"type"`
+	Key     string `yaml:"key,omitempty"`
+	JSONKey string `yaml:"json_key,omitempty"`
+	Region  string `yaml:"region,omitempty"`
+
+	// Deprecated: use Key instead. Kept for backward compatibility.
 	Path     string `yaml:"path,omitempty"`
 	SecretID string `yaml:"secret_id,omitempty"`
-	JSONKey  string `yaml:"json_key,omitempty"`
-	Region   string `yaml:"region,omitempty"`
+}
+
+// EffectiveKey returns the unified key, falling back to Path or SecretID
+// for backward compatibility with older config formats.
+func (s *SourceConfig) EffectiveKey() string {
+	if s.Key != "" {
+		return s.Key
+	}
+	if s.Path != "" {
+		return s.Path
+	}
+	return s.SecretID
 }
 
 // ValidateConfig defines validation rules for a variable.
@@ -78,6 +94,9 @@ func mergeSource(group, variable *SourceConfig) *SourceConfig {
 	merged := *group
 	if variable.Type != "" {
 		merged.Type = variable.Type
+	}
+	if variable.Key != "" {
+		merged.Key = variable.Key
 	}
 	if variable.Path != "" {
 		merged.Path = variable.Path

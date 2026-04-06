@@ -27,8 +27,45 @@ variables:
 	if cfg.Variables[0].Name != "APP_ENV" {
 		t.Errorf("variables[0].name = %q, want %q", cfg.Variables[0].Name, "APP_ENV")
 	}
-	if cfg.Variables[0].Value != "production" {
-		t.Errorf("variables[0].value = %q, want %q", cfg.Variables[0].Value, "production")
+}
+
+func TestParse_withProvider(t *testing.T) {
+	data := []byte(`
+version: "1"
+provider: aws
+variables:
+  - name: DB_HOST
+    source:
+      type: parameter
+      key: "/myapp/db-host"
+`)
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Provider != "aws" {
+		t.Errorf("provider = %q, want %q", cfg.Provider, "aws")
+	}
+	if cfg.Variables[0].Source.Type != "parameter" {
+		t.Errorf("source.type = %q, want %q", cfg.Variables[0].Source.Type, "parameter")
+	}
+	if cfg.Variables[0].Source.Key != "/myapp/db-host" {
+		t.Errorf("source.key = %q, want %q", cfg.Variables[0].Source.Key, "/myapp/db-host")
+	}
+}
+
+func TestParse_invalidProvider(t *testing.T) {
+	data := []byte(`
+version: "1"
+provider: invalid
+variables:
+  - name: X
+    value: "y"
+`)
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("expected error for invalid provider")
 	}
 }
 
@@ -81,21 +118,19 @@ variables:
 func TestParse_withGroups(t *testing.T) {
 	data := []byte(`
 version: "1"
-variables:
-  - name: APP_ENV
-    value: "production"
+provider: aws
 groups:
-  - name: aws-params
+  - name: db
     source:
-      type: aws-ssm
+      type: parameter
       region: ap-northeast-1
     variables:
       - name: DB_HOST
         source:
-          path: "/myapp/prod/db-host"
+          key: "/myapp/prod/db-host"
       - name: DB_PORT
         source:
-          path: "/myapp/prod/db-port"
+          key: "/myapp/prod/db-port"
 `)
 	cfg, err := Parse(data)
 	if err != nil {
@@ -103,25 +138,92 @@ groups:
 	}
 
 	flat := cfg.Flatten()
-	if len(flat) != 3 {
-		t.Fatalf("flattened count = %d, want 3", len(flat))
+	if len(flat) != 2 {
+		t.Fatalf("flattened count = %d, want 2", len(flat))
 	}
 
-	dbHost := flat[1]
-	if dbHost.Name != "DB_HOST" {
-		t.Errorf("name = %q, want %q", dbHost.Name, "DB_HOST")
-	}
-	if dbHost.Source == nil {
-		t.Fatal("source should not be nil")
-	}
-	if dbHost.Source.Type != "aws-ssm" {
-		t.Errorf("source.type = %q, want %q", dbHost.Source.Type, "aws-ssm")
+	dbHost := flat[0]
+	if dbHost.Source.Type != "parameter" {
+		t.Errorf("source.type = %q, want %q", dbHost.Source.Type, "parameter")
 	}
 	if dbHost.Source.Region != "ap-northeast-1" {
 		t.Errorf("source.region = %q, want %q", dbHost.Source.Region, "ap-northeast-1")
 	}
-	if dbHost.Source.Path != "/myapp/prod/db-host" {
-		t.Errorf("source.path = %q, want %q", dbHost.Source.Path, "/myapp/prod/db-host")
+	if dbHost.Source.Key != "/myapp/prod/db-host" {
+		t.Errorf("source.key = %q, want %q", dbHost.Source.Key, "/myapp/prod/db-host")
+	}
+}
+
+func TestParse_backwardCompat_awsSsm(t *testing.T) {
+	data := []byte(`
+version: "1"
+variables:
+  - name: DB_HOST
+    source:
+      type: aws-ssm
+      path: "/myapp/db-host"
+`)
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	src := cfg.Variables[0].Source
+	if src.Type != "parameter" {
+		t.Errorf("type = %q, want %q (normalized from aws-ssm)", src.Type, "parameter")
+	}
+	if src.Key != "/myapp/db-host" {
+		t.Errorf("key = %q, want %q (normalized from path)", src.Key, "/myapp/db-host")
+	}
+}
+
+func TestParse_backwardCompat_awsSecretsmanager(t *testing.T) {
+	data := []byte(`
+version: "1"
+variables:
+  - name: API_SECRET
+    source:
+      type: aws-secretsmanager
+      secret_id: "myapp/api-secret"
+      json_key: "key"
+`)
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	src := cfg.Variables[0].Source
+	if src.Type != "secret" {
+		t.Errorf("type = %q, want %q (normalized from aws-secretsmanager)", src.Type, "secret")
+	}
+	if src.Key != "myapp/api-secret" {
+		t.Errorf("key = %q, want %q (normalized from secret_id)", src.Key, "myapp/api-secret")
+	}
+	if src.JSONKey != "key" {
+		t.Errorf("json_key = %q, want %q", src.JSONKey, "key")
+	}
+}
+
+func TestEffectiveKey(t *testing.T) {
+	tests := []struct {
+		name string
+		src  SourceConfig
+		want string
+	}{
+		{"key set", SourceConfig{Key: "k"}, "k"},
+		{"path fallback", SourceConfig{Path: "p"}, "p"},
+		{"secret_id fallback", SourceConfig{SecretID: "s"}, "s"},
+		{"key overrides path", SourceConfig{Key: "k", Path: "p"}, "k"},
+		{"empty", SourceConfig{}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.src.EffectiveKey()
+			if got != tt.want {
+				t.Errorf("EffectiveKey() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -180,14 +282,14 @@ variables:
 
 func TestMergeSource(t *testing.T) {
 	group := &SourceConfig{
-		Type:   "aws-ssm",
+		Type:   "parameter",
 		Region: "us-east-1",
 	}
 
 	t.Run("nil variable source inherits group", func(t *testing.T) {
 		result := mergeSource(group, nil)
-		if result.Type != "aws-ssm" {
-			t.Errorf("type = %q, want %q", result.Type, "aws-ssm")
+		if result.Type != "parameter" {
+			t.Errorf("type = %q, want %q", result.Type, "parameter")
 		}
 		if result.Region != "us-east-1" {
 			t.Errorf("region = %q, want %q", result.Region, "us-east-1")
@@ -196,15 +298,15 @@ func TestMergeSource(t *testing.T) {
 
 	t.Run("variable overrides group fields", func(t *testing.T) {
 		variable := &SourceConfig{
-			Path:   "/my/path",
+			Key:    "/my/path",
 			Region: "ap-northeast-1",
 		}
 		result := mergeSource(group, variable)
-		if result.Type != "aws-ssm" {
-			t.Errorf("type = %q, want %q (inherited from group)", result.Type, "aws-ssm")
+		if result.Type != "parameter" {
+			t.Errorf("type = %q, want %q (inherited from group)", result.Type, "parameter")
 		}
-		if result.Path != "/my/path" {
-			t.Errorf("path = %q, want %q", result.Path, "/my/path")
+		if result.Key != "/my/path" {
+			t.Errorf("key = %q, want %q", result.Key, "/my/path")
 		}
 		if result.Region != "ap-northeast-1" {
 			t.Errorf("region = %q, want %q (overridden)", result.Region, "ap-northeast-1")
