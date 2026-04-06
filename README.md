@@ -8,6 +8,8 @@
 
 **Genbu** is a single-binary CLI tool that manages environment variables for cloud and container environments. It reads a YAML config, fetches secrets from cloud providers, validates values, and execs your application — designed to be used as a Docker entrypoint.
 
+The name "Genbu" is derived from **Gen**erative **ENV** **U**tility, evoking Genbu (玄武, /ɡembɯ/), one of the Four Guardian Spirits (四神) in East Asian mythology — the Black Tortoise of the North, a symbol of protection and stability.
+
 ### Features
 
 - **YAML-based configuration** — Define env vars, sources, defaults, and validation rules in a single file
@@ -287,6 +289,8 @@ make clean       # Remove build artifacts
 ## Genbu (玄武)
 
 **Genbu** は、クラウド・コンテナ環境向けの環境変数管理CLIツールです。YAML設定ファイルに基づいて、AWS Parameter Store や Secrets Manager からの値の取得、バリデーション、アプリケーションの起動を一括で行います。Docker の entrypoint として最適なシングルバイナリで提供されます。
+
+名前の「Genbu」は **Gen**erative **ENV** **U**tility に由来し、四神の玄武（/ɡembɯ/）— 北方を守護する霊獣で、守護と安定の象徴 — を想起して名付けました。
 
 ### 主な機能
 
